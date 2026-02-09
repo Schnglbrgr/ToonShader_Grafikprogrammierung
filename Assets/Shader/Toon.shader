@@ -10,12 +10,12 @@ Shader "Custom/Toon"
 
         [Header(___Outline___)][Space(5)]
         [HDR]_OutlineColor ("Outline Color", Color) = (0, 0, 0, 1)
-        _OutlineThickness ("Outline Thickness", Range(0.001, 0.05)) = 0.02
+        _OutlineThickness ("Outline Thickness", Range(0, 0.05)) = 0.02
 
         [Header(___CelShading___)][Space(5)]
         _ShadowTexture("Shadow Texture", 2D) = "white" {}
-        _LightThreshold("Light Threshold", Range(0, 1)) = 0.5
-        _Steps ("Steps", Range(1,10)) = 2
+        _LightThreshold("Light Threshold", Range(0.001, 1)) = 0.001
+        _Steps ("Steps", Range(2,10)) = 2
 
         [Header(___Specular___)][Space(5)]
         _SpecularPower ("Specular Power", Range(1, 100)) = 50
@@ -31,64 +31,15 @@ Shader "Custom/Toon"
     {
         Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
 
-        Pass
-        {
-            Name "Outline"
-            Cull Front
-            ZWrite On
-            ZTest LEqual
-
-            HLSLPROGRAM
-
-            #pragma vertex vert
-            #pragma fragment frag
-
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-                float3 normalOS   : NORMAL;
-            };
-
-            struct Varyings
-            {
-                float4 positionHCS : SV_POSITION;
-            };
-
-
-            CBUFFER_START(UnityPerMaterial)
-                float _OutlineThickness;
-                half4 _OutlineColor;
-            CBUFFER_END
-
-
-
-            Varyings vert(Attributes IN)
-            {
-                Varyings OUT;
-                float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
-                float3 posWS = TransformObjectToWorld(IN.positionOS.xyz);
-                posWS += normalWS * _OutlineThickness;
-                OUT.positionHCS = TransformWorldToHClip(posWS);
-
-                return OUT;
-            }
-
-
-
-            half4 frag(Varyings IN) : SV_Target
-            {
-                return _OutlineColor;
-            }
-            ENDHLSL
-        }
 
         Pass
         {
             Name "ToonShading"
             Tags {"LightMode" = "UniversalForward"}
 
+            Cull Off
+
+        
             HLSLPROGRAM
 
             #pragma vertex vert
@@ -132,13 +83,12 @@ Shader "Custom/Toon"
             float4 _BaseColor;
             float4 _AmbientColor;
             float4 _OutlineColor;
-            float _EdgeThreshold;
             float _Steps;
             float _SpecularPower;
             float _SpecularIntensity;
             float _RimLightThreshold;
             float _RimLightIntensity;
-            float3 _RimLightColor;
+            float4 _RimLightColor;
             CBUFFER_END
 
             Varyings vert(Attributes IN)
@@ -174,7 +124,7 @@ Shader "Custom/Toon"
                 v.rimThreshold = _RimLightThreshold;
                 v.ambientColor = _AmbientColor.xyz;
                 v.rimLightIntensity = _RimLightIntensity;
-                v.rimLightColor = _RimLightColor;
+                v.rimLightColor = _RimLightColor.rgb;
                 return v;
             }
 
@@ -182,22 +132,20 @@ Shader "Custom/Toon"
             float3 CalculateCelShading(float3 n, Light l, float3 viewDir, CelShadingVariables v, float shadowAttenuation, float2 uv)
             {
                 float3 baseTex = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uv).rgb;
-                float3 shadowTex = SAMPLE_TEXTURE2D(_ShadowTexture, sampler_ShadowTexture, uv).rgb;
+                float2 shadowUV = TRANSFORM_TEX(uv, _ShadowTexture);
+                float4 shadowTex = SAMPLE_TEXTURE2D(_ShadowTexture, sampler_ShadowTexture, shadowUV);
 
                 float3 ambient = _BaseColor.xyz * v.ambientColor.xyz;
 
                 float diffuse = saturate(dot(n, l.direction));
-                diffuse = diffuse * 0.5 + 0.5;
 
                 //----Receive Shadow---
                 float litColor = saturate(diffuse * shadowAttenuation);
 
                 float lightMask = step(_LightThreshold, litColor);
-
                 float lightRamp = saturate((litColor - _LightThreshold) / (1.0 - _LightThreshold));
                 
-                
-                float3 color = lerp(shadowTex, baseTex, lightMask);
+                float3 color = baseTex * lerp(1.0, shadowTex, shadowTex.a * (1.0 - lightMask));
 
 
                 //----Specular----
@@ -216,7 +164,10 @@ Shader "Custom/Toon"
                 rim *= lightRamp;
                 rim *= v.rimLightIntensity * v.rimLightColor;
 
-                return l.color * (lightRamp + max(specularStep, rim)) + ambient * color;
+                float3 lit = color * lightRamp;
+                float3 highlights = max(specularStep, rim);
+
+                return l.color * (lit + highlights) + ambient * color;
             }
 
 
@@ -225,7 +176,8 @@ Shader "Custom/Toon"
             half4 frag(Varyings IN) : SV_Target
             {
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(IN.posWS));
-                float shadowAtten = mainLight.shadowAttenuation;
+                float shadowAtten = saturate(mainLight.shadowAttenuation);
+                shadowAtten = step(0.5, shadowAtten);
 
                 CelShadingVariables c = GetCelShadingVariables();
 
@@ -234,85 +186,123 @@ Shader "Custom/Toon"
 
                 float3 lighting = CalculateCelShading(N, mainLight, V, c, shadowAtten, IN.uv);
 
-                return float4(lighting, 1);
+                return float4 (lighting, 1);
             }
             ENDHLSL
         }
 
 
         
-
         Pass
-        {   
-            Name "ShadowCaster"
-            Tags
-            {
-                "LightMode" = "ShadowCaster"
-            }
-
+        {
+            Name "Outline"
+            Cull Front
+            ZWrite On
+            ZTest LEqual
 
 
             HLSLPROGRAM
 
-            #pragma vertex ShadowVert
-            #pragma fragment ShadowFrag
+            #pragma vertex vert
+            #pragma fragment frag
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
-
-            float3 _LightDirection;
-            float3 _LightPosition;
-
-            CBUFFER_START(UnityPerMaterial)
-            
-            CBUFFER_END
 
             struct Attributes
             {
-                float4 positionOS   : POSITION;
-                float3 normalOS     : NORMAL;
-
+                float4 positionOS : POSITION;
+                float3 normalOS   : NORMAL;
             };
 
             struct Varyings
             {
-                float4 positionCS   : SV_POSITION;
-                float3 objectPos : TEXCOORD0;
+                float4 positionHCS : SV_POSITION;
             };
 
 
+            CBUFFER_START(UnityPerMaterial)
+                float _OutlineThickness;
+                half4 _OutlineColor;
+            CBUFFER_END
 
-            float4 GetShadowPositionHClip(Attributes input)
+
+
+            Varyings vert(Attributes IN)
             {
-                float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
-                float3 normalWS = TransformObjectToWorldNormal(input.normalOS);
+                Varyings OUT;
+                float3 posWS = TransformObjectToWorld(IN.positionOS.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
 
-                normalWS *= dot(normalWS, _LightDirection) > 0 ? 1 : -1;
+                float3 posVS = TransformWorldToView(posWS);
+                float3 normalVS = TransformWorldToViewDir(normalWS);
 
-                #if _CASTING_PUNCTUAL_LIGHT_SHADOW
-                    float3 lightDirectionWS = normalize(_LightPosition - positionWS);
-                #else
-                    float3 lightDirectionWS = _LightDirection;
-                #endif
-
-                float4 positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
-                positionCS = ApplyShadowClamping(positionCS);
-                return positionCS;
+                posVS += normalize(normalVS) * _OutlineThickness;
+                OUT.positionHCS = mul(UNITY_MATRIX_P, float4(posVS, 1.0));
+                return OUT;
+                
             }
 
-            Varyings ShadowVert(Attributes input)
-            {
-                Varyings output;
-                output.objectPos = input.positionOS.xyz;
 
-                output.positionCS = GetShadowPositionHClip(input);
-                return output;
+
+            half4 frag(Varyings IN) : SV_Target
+            {
+                return _OutlineColor;
+            }
+            ENDHLSL
+        }
+
+        
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On
+            ZTest LEqual
+            Cull Back
+
+            HLSLPROGRAM
+
+            #pragma vertex vert
+            #pragma fragment frag
+
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS   : NORMAL;
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+           Varyings vert(Attributes IN)
+            {
+                Varyings OUT;
+
+                float3 positionWS = TransformObjectToWorld(IN.positionOS.xyz);
+                float3 normalWS   = TransformObjectToWorldNormal(IN.normalOS);
+                float3 lightDirWS = GetMainLight().direction;
+
+                OUT.positionCS = TransformWorldToHClip(
+                    ApplyShadowBias(positionWS, normalWS, lightDirWS)
+                );
+
+                return OUT;
             }
 
-            half4 ShadowFrag(Varyings input) : SV_TARGET
+            half4 frag(Varyings IN) : SV_Target
             {
                 return 0;
             }
+
             ENDHLSL
         }
     }

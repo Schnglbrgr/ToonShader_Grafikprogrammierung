@@ -47,7 +47,7 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _LightThreshold: 0
+    - _LightThreshold: 0.001
     - _OutlineThickness: 0.02
     - _RimLightIntensity: 3
     - _RimLightThreshold: 0.7

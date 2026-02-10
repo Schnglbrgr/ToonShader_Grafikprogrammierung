@@ -27,6 +27,8 @@ Shader "Custom/Toon"
         _RimLightIntensity ("Rim Light Intensity", Range(1, 100)) = 3
     }
 
+
+
     SubShader
     {
         Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
@@ -250,6 +252,7 @@ Shader "Custom/Toon"
             }
             ENDHLSL
         }
+        
 
         
         Pass
@@ -291,9 +294,7 @@ Shader "Custom/Toon"
                 float3 normalWS   = TransformObjectToWorldNormal(IN.normalOS);
                 float3 lightDirWS = GetMainLight().direction;
 
-                OUT.positionCS = TransformWorldToHClip(
-                    ApplyShadowBias(positionWS, normalWS, lightDirWS)
-                );
+                OUT.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirWS));
 
                 return OUT;
             }
